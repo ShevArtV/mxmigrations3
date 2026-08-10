@@ -13,38 +13,58 @@
 - защита от одновременного запуска через MySQL `GET_LOCK`;
 - отказ при появлении новой миграции раньше уже применённых;
 - команды `status`, `up`, `baseline`, `new`;
+- синхронизация нескольких XML-схем и команда `model:build`;
 - встроенные рецепты типовых DDL-операций и удаления объектов MODX;
 - проектные рецепты через `MigrationRecipeProviderInterface`;
 - автономный код миграции: после генерации файл не зависит от рецепта.
 
 ## Конфигурация проекта
 
-Скопируйте `core/components/mxmigrations/docs/config.example.php` в свой компонент.
+Скопируйте `core/components/mxmigrations/docs/config.example.php` в `core/config/mxmigrations.php`.
 Относительные пути считаются от каталога конфига.
 
 ```php
 return [
-    'id' => 'shop',
-    'modx_root' => dirname(__DIR__, 4),
-    'migrations_path' => __DIR__ . '/../migrations',
-    'journal_table' => 'shop_migrations',
-    'lock_name' => 'shop_migrations',
-    'autoload' => [__DIR__ . '/../vendor/autoload.php'],
-    'recipe_providers' => [Shop\Migrations\RecipeProvider::class],
+    'id' => 'site',
+    'modx_root' => dirname(__DIR__, 2),
+    'migrations_path' => dirname(__DIR__) . '/migrations',
+    'models' => [
+        'site' => [
+            'schema_path' => dirname(__DIR__) . '/components/site/schema/site.mysql.schema.xml',
+            'model_path' => dirname(__DIR__) . '/components/site/src/Model',
+        ],
+        'minishop3' => [
+            'schema_path' => dirname(__DIR__) . '/components/minishop3/schema/minishop3.mysql.schema.xml',
+            'model_path' => dirname(__DIR__) . '/components/minishop3/src/Model',
+            'overlay' => true,
+        ],
+    ],
 ];
 ```
+
+Таблица журнала и MySQL lock всегда называются `<id>_migrations` с учётом
+префикса MODX. `overlay` нужен для стороннего пакета: изменения хранятся в
+`migrations/.mxmigrations/model-changes.php` и повторно накладываются после его обновления.
 
 ## CLI
 
 ```bash
-php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/shop/config/migrations.php recipe:list
-php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/shop/config/migrations.php new add_status --recipe=add-column --table=shop_orders --column=status --type="VARCHAR(20) NOT NULL" --apply
-php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/shop/config/migrations.php status --strict
-php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/shop/config/migrations.php up --dry-run
-php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/shop/config/migrations.php up
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php recipe:list
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php new add_status --recipe=add-column --table=site_orders --column=status --type="VARCHAR(20) NOT NULL" --apply
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php status --strict
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php up --dry-run
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php up
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php model:build
+php core/components/mxmigrations/bin/mxmigrations.php --config=core/config/mxmigrations.php model:build --apply
 ```
 
 Без `--apply` команда `new` только печатает имя и тело будущего файла.
+
+Для шаблонов колонок и индексов `new` ищет таблицу во всех настроенных схемах.
+Если владельцев несколько, укажите `--model=minishop3`. Собственная XML-схема
+обновляется сразу; для модели с `overlay` записывается проектное наложение. Затем
+примените миграцию командой `up` и только после успеха выполните `model:build --apply`.
+Сборщик заменяет metadata/map, но сохраняет существующие классы с ручной логикой.
 
 Для `create-tables` в MODX 3 передаются PSR-4-имена модели и классов:
 

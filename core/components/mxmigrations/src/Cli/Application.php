@@ -7,6 +7,9 @@ use MODX\Revolution\modX;
 use MxMigrations\Config\ProjectConfig;
 use MxMigrations\Core\MigrationRunner;
 use MxMigrations\Core\MigrationWriter;
+use MxMigrations\Model\SchemaCoordinator;
+use MxMigrations\Model\SchemaDocument;
+use MxMigrations\Platform\Modx3\ModelBuilder;
 use MxMigrations\Platform\Modx3\ModxExecutor;
 use MxMigrations\Platform\Modx3\MysqlLock;
 use MxMigrations\Platform\Modx3\PdoJournal;
@@ -45,6 +48,8 @@ final class Application
                 return 0;
             case 'new':
                 return $this->generate($positionals, $options);
+            case 'model:build':
+                return $this->buildModels($options);
             case 'status':
                 return $this->status($this->runner(), isset($options['strict']));
             case 'up':
@@ -70,14 +75,36 @@ final class Application
         }
         $recipe = (string)($options['recipe'] ?? 'empty');
         $write = isset($options['apply']);
-        unset($options['recipe'], $options['apply'], $options['config']);
+        $model = isset($options['model']) ? (string)$options['model'] : null;
+        unset($options['recipe'], $options['apply'], $options['config'], $options['model']);
+        $writer = new MigrationWriter($this->config->getMigrationsPath());
         $result = (new MigrationGenerator(
-            new MigrationWriter($this->config->getMigrationsPath()),
+            $writer,
             $this->recipes
-        ))->generate($slug, $recipe, $options, $write);
+        ))->generate($slug, $recipe, $options, false);
+        $schemaArguments = $options;
+        if ($model !== null) { $schemaArguments['model'] = $model; }
+        $coordinator = new SchemaCoordinator($this->config);
+        $prepared = $coordinator->prepare($result['name'], $recipe, $schemaArguments);
+
+        if ($write) {
+            $result['path'] = $writer->writeNamed($result['name'], $result['body']);
+            try {
+                if ($prepared !== null) { $coordinator->commit($prepared); }
+            } catch (\Throwable $e) {
+                @unlink($result['path']);
+                throw $e;
+            }
+        }
 
         if ($result['path'] !== null) {
             echo 'Создана миграция: ' . $result['path'] . PHP_EOL;
+            if ($prepared !== null) {
+                echo 'Изменение модели: ' . $prepared['model']->getName()
+                    . ($prepared['model']->usesOverlay() ? ' (проектное наложение)' : ' (XML-схема)') . PHP_EOL;
+                echo 'После успешного up выполните model:build --model='
+                    . $prepared['model']->getName() . ' --apply.' . PHP_EOL;
+            }
         } else {
             echo 'Будет создана: ' . $result['name'] . PHP_EOL . PHP_EOL . $result['body'];
             echo PHP_EOL . 'Для записи добавьте --apply.' . PHP_EOL;
@@ -85,9 +112,64 @@ final class Application
         return 0;
     }
 
-    private function runner(): MigrationRunner
+    /** @param array<string, mixed> $options */
+    private function buildModels(array $options): int
     {
+        $models = $this->config->getModels();
+        if (isset($options['model'])) {
+            $selected = (string)$options['model'];
+            $models = [$selected => $this->config->getModel($selected)];
+        }
+        if (!$models) { throw new \RuntimeException('В конфиге нет моделей. Добавьте раздел models.'); }
+
         $modx = $this->modx();
+        $plan = $this->runner($modx)->plan();
+        $applied = [];
+        foreach ($plan['applied'] as $item) { $applied[$item['file']->getName()] = true; }
+        $coordinator = new SchemaCoordinator($this->config);
+        $builder = new ModelBuilder($modx);
+        $write = isset($options['apply']);
+
+        foreach ($models as $name => $model) {
+            $changes = $coordinator->getStore()->forModel($name);
+            foreach ($changes as $change) {
+                if (!isset($applied[(string)$change['migration']])) {
+                    throw new \RuntimeException(
+                        'Модель ' . $name . ' не собрана: сначала примените миграцию ' . $change['migration'] . '.'
+                    );
+                }
+            }
+
+            $schemaPath = $model->getSchemaPath();
+            $temporarySchema = null;
+            try {
+                if ($model->usesOverlay()) {
+                    $temporarySchema = tempnam(sys_get_temp_dir(), 'mxmigrations-schema-');
+                    if ($temporarySchema === false) { throw new \RuntimeException('Не удалось создать временную схему.'); }
+                    $schema = new SchemaDocument($schemaPath);
+                    foreach ($changes as $change) { $schema->apply($change); }
+                    $schema->save($temporarySchema);
+                    $schemaPath = $temporarySchema;
+                }
+                $diff = $builder->build($schemaPath, $model->getModelPath(), $write);
+            } finally {
+                if ($temporarySchema !== null) { @unlink($temporarySchema); }
+            }
+
+            echo $name . ':' . PHP_EOL;
+            foreach (['added' => 'новый', 'changed' => 'изменён', 'removed' => 'удалён'] as $group => $label) {
+                foreach ($diff[$group] as $file) { echo '  ' . $label . ': ' . $file . PHP_EOL; }
+            }
+            if (!$diff['added'] && !$diff['changed'] && !$diff['removed']) { echo '  модель соответствует схеме' . PHP_EOL; }
+        }
+        if (!$write) { echo 'Для записи модели добавьте --apply.' . PHP_EOL; }
+
+        return 0;
+    }
+
+    private function runner(?modX $modx = null): MigrationRunner
+    {
+        $modx = $modx ?: $this->modx();
         return new MigrationRunner(
             $this->config->getMigrationsPath(),
             new PdoJournal($modx, $this->config->getJournalTable()),
@@ -194,6 +276,7 @@ final class Application
         return "mxMigrations\n"
             . "  status [--strict]\n  up [--dry-run] [--ignore-checksum] [--allow-out-of-order]\n"
             . "  baseline [--by=name]\n  new <slug> [--recipe=name] [recipe options] [--apply]\n"
+            . "  model:build [--model=name] [--apply]\n"
             . "  recipe:list\n  recipe:help <name>\n";
     }
 }
