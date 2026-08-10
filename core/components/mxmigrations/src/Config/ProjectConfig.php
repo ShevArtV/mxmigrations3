@@ -6,9 +6,9 @@ final class ProjectConfig
 {
     private string $id;
     private string $migrationsPath;
-    private string $journalTable;
-    private string $lockName;
     private string $modxRoot;
+    /** @var array<string, ModelConfig> */
+    private array $models;
     /** @var array<int, string> */
     private array $recipeProviders;
     /** @var array<int, string> */
@@ -19,15 +19,20 @@ final class ProjectConfig
     {
         $this->id = $this->identifier((string)($data['id'] ?? ''), 'id');
         $this->migrationsPath = $this->path((string)($data['migrations_path'] ?? ''), $baseDir);
-        $this->journalTable = $this->identifier(
-            (string)($data['journal_table'] ?? $this->id . '_migrations'),
-            'journal_table'
-        );
-        $this->lockName = trim((string)($data['lock_name'] ?? $this->id . '_migrations'));
-        if ($this->lockName === '') {
-            throw new \InvalidArgumentException('lock_name не может быть пустым.');
-        }
         $this->modxRoot = $this->path((string)($data['modx_root'] ?? $baseDir), $baseDir);
+        $this->models = [];
+        foreach ((array)($data['models'] ?? []) as $name => $model) {
+            if (!is_array($model)) {
+                throw new \InvalidArgumentException('Описание модели ' . $name . ' должно быть массивом.');
+            }
+            $name = $this->identifier((string)$name, 'models');
+            $this->models[$name] = new ModelConfig(
+                $name,
+                $this->path((string)($model['schema_path'] ?? ''), $baseDir),
+                $this->path((string)($model['model_path'] ?? ''), $baseDir),
+                !empty($model['overlay'])
+            );
+        }
         $this->recipeProviders = array_values(array_map('strval', (array)($data['recipe_providers'] ?? [])));
         $this->autoload = [];
         foreach ((array)($data['autoload'] ?? []) as $path) {
@@ -51,9 +56,23 @@ final class ProjectConfig
 
     public function getId(): string { return $this->id; }
     public function getMigrationsPath(): string { return $this->migrationsPath; }
-    public function getJournalTable(): string { return $this->journalTable; }
-    public function getLockName(): string { return $this->lockName; }
+    public function getJournalTable(): string { return $this->id . '_migrations'; }
+    public function getLockName(): string { return $this->id . '_migrations'; }
     public function getModxRoot(): string { return $this->modxRoot; }
+    /** @return array<string, ModelConfig> */
+    public function getModels(): array { return $this->models; }
+    public function getModel(string $name): ModelConfig
+    {
+        if (!isset($this->models[$name])) {
+            throw new \InvalidArgumentException('Модель «' . $name . '» не настроена.');
+        }
+
+        return $this->models[$name];
+    }
+    public function getModelChangesPath(): string
+    {
+        return $this->migrationsPath . '/.mxmigrations/model-changes.php';
+    }
     /** @return array<int, string> */
     public function getRecipeProviders(): array { return $this->recipeProviders; }
     /** @return array<int, string> */
