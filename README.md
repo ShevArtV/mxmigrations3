@@ -91,15 +91,19 @@ final class SeedWarehouseRecipe implements \MxMigrations\Recipe\MigrationRecipeI
 
     public function render(string $migrationName, array $arguments): string
     {
-        // Вернуть полный PHP-файл с
-        // `return function (\MODX\Revolution\modX $modx): void { ... };`.
+        return \MxMigrations\Recipe\FileTemplate::render(
+            __DIR__ . '/templates/seed-warehouse.php.tpl',
+            ['migration_name' => $migrationName]
+        );
     }
 }
 ```
 
 Провайдер реализует `MigrationRecipeProviderInterface::getRecipes()` и возвращает
 массив объектов рецептов. Проектные имена рекомендуется начинать с `<project>:`.
-Повторная регистрация имени считается ошибкой.
+Повторная регистрация имени считается ошибкой. `FileTemplate` заменяет
+плейсхолдеры `{{name}}` в отдельном файле и останавливается при пропущенных или
+лишних значениях.
 
 ## Правило автономности
 
