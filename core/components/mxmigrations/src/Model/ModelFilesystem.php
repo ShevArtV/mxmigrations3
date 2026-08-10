@@ -79,13 +79,6 @@ final class ModelFilesystem
         @rmdir($dir);
     }
 
-    public static function isGeneratedClass(?string $path): bool
-    {
-        if ($path === null || !is_file($path)) { return false; }
-        $contents = (string)file_get_contents($path);
-        return (bool)preg_match('~class\s+[A-Za-z_][A-Za-z0-9_]*[^\{]*\{\s*\}\s*$~s', $contents);
-    }
-
     /** @return array<string, string> */
     private function files(string $dir): array
     {

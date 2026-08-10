@@ -41,11 +41,10 @@ final class ModelBuilder
             $built = $relative !== '' && is_dir($root . '/' . $relative)
                 ? $root . '/' . $relative
                 : $this->files->generatedRoot($root, $package);
-            $managed = static function (string $relative, ?string $current = null): bool {
-                $relative = str_replace('\\', '/', $relative);
+            $managed = static function (string $relative): bool {
+                $relative = str_replace('\\', '/', strtolower($relative));
                 return strpos($relative, 'mysql/') === 0
-                    || strpos(basename($relative), 'metadata.') === 0
-                    || ModelFilesystem::isGeneratedClass($current);
+                    || strpos(basename($relative), 'metadata.') === 0;
             };
             $diff = $this->files->diff($modelPath, $built, $managed);
             if ($apply) { $this->files->apply($modelPath, $built, $managed); }
