@@ -1,7 +1,7 @@
-1.0.0-beta
+2.0.0-beta
 ==============
+- FEATURE: Первая линия для MODX 3 с PHP 8.1+ и namespaced API ядра.
 - FEATURE: Раннер PHP-миграций с журналом, checksum, baseline и защитой порядка.
-- FEATURE: Генератор автономных миграций со встроенными типовыми рецептами.
+- FEATURE: Генератор автономных миграций со встроенными рецептами для MODX 3.
 - FEATURE: Публичный API проектных рецептов с namespace имён и проверкой конфликтов.
 - FEATURE: CLI-команды status, up, baseline, new, recipe:list и recipe:help.
-

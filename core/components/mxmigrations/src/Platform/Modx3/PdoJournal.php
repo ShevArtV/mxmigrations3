@@ -1,7 +1,8 @@
 <?php
 
-namespace MxMigrations\Platform\Modx2;
+namespace MxMigrations\Platform\Modx3;
 
+use MODX\Revolution\modX;
 use MxMigrations\Core\JournalInterface;
 use MxMigrations\Core\MigrationRecord;
 
@@ -9,10 +10,10 @@ final class PdoJournal implements JournalInterface
 {
     private const MAX_OUTPUT_LENGTH = 65535;
 
-    private \modX $modx;
+    private modX $modx;
     private string $table;
 
-    public function __construct(\modX $modx, string $table)
+    public function __construct(modX $modx, string $table)
     {
         if (!preg_match('~^[a-zA-Z][a-zA-Z0-9_]*$~', $table)) {
             throw new \InvalidArgumentException('Недопустимое имя таблицы журнала: ' . $table);

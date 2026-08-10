@@ -98,7 +98,7 @@ PHP;
     private function renderEmpty(array $params): string
     {
         return <<<'PHP'
-return function (modX $modx): void {
+return function (\MODX\Revolution\modX $modx): void {
     $prefix = (string)$modx->getOption('table_prefix', null, 'modx_');
 
     // Работа миграции. Печать попадает в колонку `output` журнала.
@@ -111,11 +111,11 @@ PHP;
     /** @param array<string, mixed> $params */
     private function renderDropSettings(array $params): string
     {
-        $class = $this->quote((string)($params['class'] ?? 'modSystemSetting'));
+        $class = $this->quote((string)($params['class'] ?? '\\MODX\\Revolution\\modSystemSetting'));
         $keys = $this->phpList($this->requireList($params, 'keys', 'ключи настроек'));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$className = {$class};
     \$keys = {$keys};
 
@@ -154,7 +154,7 @@ return function (modX \$modx): void {
     }
 
     if (\$total > 0) {
-        \$modx->cacheManager->refresh();
+        \$modx->getCacheManager()->refresh();
     }
 
     echo sprintf('Готово: удалено записей — %d.', \$total) . PHP_EOL;
@@ -168,7 +168,7 @@ PHP;
         $tables = $this->phpList($this->requireList($params, 'tables', 'имена таблиц без префикса'));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$tables = {$tables};
 
@@ -199,11 +199,11 @@ PHP;
     /** @param array<string, mixed> $params */
     private function renderDropElements(array $params): string
     {
-        $class = $this->quote((string)($params['class'] ?? 'modPlugin'));
+        $class = $this->quote((string)($params['class'] ?? '\\MODX\\Revolution\\modPlugin'));
         $names = $this->phpList($this->requireList($params, 'names', 'имена элементов'));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$className = {$class};
     \$names = {$names};
 
@@ -228,7 +228,7 @@ return function (modX \$modx): void {
     }
 
     if (\$removed > 0) {
-        \$modx->cacheManager->refresh();
+        \$modx->getCacheManager()->refresh();
     }
 
     echo sprintf('Готово: удалено элементов — %d.', \$removed) . PHP_EOL;
@@ -244,7 +244,7 @@ PHP;
         $type = $this->quote($this->requireString($params, 'type', 'определение колонки, например "TINYINT(1) NOT NULL DEFAULT 0"'));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$table = \$prefix . {$table};
     \$column = {$column};
@@ -283,7 +283,7 @@ PHP;
         $expected = $this->quote(strtolower($this->columnType($type)));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$table = \$prefix . {$table};
     \$column = {$column};
@@ -330,7 +330,7 @@ PHP;
  * Отката у миграций нет: DDL в MySQL не транзакционен, а данные удалённой колонки
  * не восстановить. Убедитесь, что колонка больше нигде не читается.
  */
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$table = \$prefix . {$table};
     \$column = {$column};
@@ -368,7 +368,7 @@ PHP;
         $duplicateCheck = $unique ? $this->uniqueGuard() : '';
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$table = \$prefix . {$table};
     \$index = {$name};
@@ -408,7 +408,7 @@ PHP;
         $name = $this->quote($this->requireString($params, 'name', 'имя индекса'));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$prefix = (string)\$modx->getOption('table_prefix', null, 'modx_');
     \$table = \$prefix . {$table};
     \$index = {$name};
@@ -472,16 +472,22 @@ PHP;
     private function renderCreateTables(array $params): string
     {
         $classes = $this->phpList($this->requireList($params, 'classes', 'классы xPDO из схемы компонента'));
-        $package = $this->quote($this->requireString($params, 'package', 'имя xPDO-пакета'));
-        $modelPath = $this->quote($this->requireString($params, 'model-path', 'путь к каталогу модели'));
+        $package = $this->quote($this->requireString($params, 'package', 'PSR-4 пакет модели'));
+        $modelPath = $this->quote($this->requireString($params, 'model-path', 'путь к каталогу src модели'));
+        $namespacePrefix = $this->quote($this->requireString(
+            $params,
+            'namespace-prefix',
+            'корневой PSR-4 namespace модели'
+        ));
 
         return <<<PHP
-return function (modX \$modx): void {
+return function (\MODX\Revolution\modX \$modx): void {
     \$classes = {$classes};
     \$package = {$package};
     \$modelPath = {$modelPath};
+    \$namespacePrefix = {$namespacePrefix};
 
-    if (!\$modx->addPackage(\$package, \$modelPath)) {
+    if (!\$modx->addPackage(\$package, \$modelPath, null, \$namespacePrefix)) {
         throw new RuntimeException('Не удалось подключить xPDO-пакет ' . \$package . ' из ' . \$modelPath . '.');
     }
 

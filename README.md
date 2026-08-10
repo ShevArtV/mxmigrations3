@@ -1,6 +1,10 @@
 # mxMigrations
 
-Расширяемый раннер и генератор миграций для MODX Revolution 2 и PHP 7.4+.
+Расширяемый раннер и генератор миграций для MODX Revolution 3 и PHP 8.1+.
+
+Это отдельная линия пакета для MODX 3. Версия для MODX 2 живёт в
+[ShevArtV/mxmigrations](https://github.com/ShevArtV/mxmigrations) и нумеруется как `1.x`;
+эта линия живёт в `ShevArtV/mxmigrations3` и нумеруется как `2.x`.
 
 ## Возможности
 
@@ -42,6 +46,18 @@ php core/components/mxmigrations/bin/mxmigrations.php --config=core/components/s
 
 Без `--apply` команда `new` только печатает имя и тело будущего файла.
 
+Для `create-tables` в MODX 3 передаются PSR-4-имена модели и классов:
+
+```bash
+php core/components/mxmigrations/bin/mxmigrations.php --config=... new create_shop_tables \
+  --recipe=create-tables \
+  --package='Shop\\Model' \
+  --model-path='/var/www/site/core/components/shop/src/' \
+  --namespace-prefix='Shop\\' \
+  --classes='Shop\\Model\\Order,Shop\\Model\\OrderProduct' \
+  --apply
+```
+
 ## Проектный рецепт
 
 ```php
@@ -53,7 +69,8 @@ final class SeedWarehouseRecipe implements \MxMigrations\Recipe\MigrationRecipeI
 
     public function render(string $migrationName, array $arguments): string
     {
-        // Вернуть полный PHP-файл с `return function (modX $modx): void { ... };`.
+        // Вернуть полный PHP-файл с
+        // `return function (\MODX\Revolution\modX $modx): void { ... };`.
     }
 }
 ```
@@ -75,3 +92,8 @@ composer install
 composer test
 ```
 
+## Сборка transport
+
+```bash
+modxapp build mxmigrations
+```

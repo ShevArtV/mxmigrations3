@@ -184,7 +184,8 @@ class MigrationWriter
         $closing = strrpos($target, '};');
         if ($closing === false) {
             throw new \RuntimeException(
-                'В ' . basename($path) . ' не найдено тело `return function (modX $modx): void { … };`'
+                'В ' . basename($path)
+                . ' не найдено тело `return function (\\MODX\\Revolution\\modX $modx): void { … };`'
                 . ' — допишите операцию руками.'
             );
         }

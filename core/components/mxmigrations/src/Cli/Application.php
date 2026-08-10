@@ -2,12 +2,14 @@
 
 namespace MxMigrations\Cli;
 
+use MODX\Revolution\Error\modError;
+use MODX\Revolution\modX;
 use MxMigrations\Config\ProjectConfig;
 use MxMigrations\Core\MigrationRunner;
 use MxMigrations\Core\MigrationWriter;
-use MxMigrations\Platform\Modx2\ModxExecutor;
-use MxMigrations\Platform\Modx2\MysqlLock;
-use MxMigrations\Platform\Modx2\PdoJournal;
+use MxMigrations\Platform\Modx3\ModxExecutor;
+use MxMigrations\Platform\Modx3\MysqlLock;
+use MxMigrations\Platform\Modx3\PdoJournal;
 use MxMigrations\Recipe\MigrationGenerator;
 use MxMigrations\Recipe\RecipeRegistry;
 use MxMigrations\Recipe\RecipeRegistryFactory;
@@ -130,23 +132,33 @@ final class Application
         return 0;
     }
 
-    private function modx(): \modX
+    private function modx(): modX
     {
-        $index = $this->config->getModxRoot() . '/index.php';
-        if (!is_file($index)) {
-            throw new \RuntimeException('index.php MODX не найден: ' . $index);
+        $config = $this->config->getModxRoot() . '/config.core.php';
+        if (!is_file($config)) {
+            throw new \RuntimeException('config.core.php MODX не найден: ' . $config);
         }
         if (!defined('MODX_API_MODE')) {
             define('MODX_API_MODE', true);
         }
-        /** @var mixed $modx */
-        $modx = null;
-        require $index;
-        if (!$modx instanceof \modX) {
-            throw new \RuntimeException('MODX не инициализирован после подключения ' . $index . '.');
+        require_once $config;
+
+        $autoload = null;
+        foreach ([$this->config->getModxRoot() . '/vendor/autoload.php', MODX_CORE_PATH . 'vendor/autoload.php'] as $candidate) {
+            if (is_file($candidate)) {
+                $autoload = $candidate;
+                break;
+            }
         }
-        $modx->getService('error', 'error.modError');
-        $modx->setLogLevel(\xPDO::LOG_LEVEL_ERROR);
+        if ($autoload === null) {
+            throw new \RuntimeException('Composer autoload MODX не найден ни в корне сайта, ни в core/.');
+        }
+        require_once $autoload;
+
+        $modx = new modX();
+        $modx->initialize('mgr');
+        $modx->getService('error', modError::class);
+        $modx->setLogLevel(modX::LOG_LEVEL_ERROR);
 
         return $modx;
     }

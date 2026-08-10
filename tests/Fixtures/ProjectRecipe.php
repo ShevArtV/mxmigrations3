@@ -17,7 +17,7 @@ final class ProjectRecipe implements MigrationRecipeInterface
             throw new \InvalidArgumentException('Для проектного рецепта нужен --widget.');
         }
 
-        return "<?php\n\nreturn function (modX \$modx): void {\n"
+        return "<?php\n\nreturn function (\MODX\Revolution\modX \$modx): void {\n"
             . '    $widget = ' . var_export($widget, true) . ";\n"
             . "    echo 'project widget: ' . \$widget . PHP_EOL;\n};\n";
     }

@@ -4,7 +4,8 @@
  * Выполнение миграций в контексте MODX.
  *
  * Две ветки исполнения:
- *   1. `.php` новой конвенции — файл возвращает `callable(\modX $modx)`, раннер его
+ *   1. `.php` новой конвенции — файл возвращает
+ *      `callable(\MODX\Revolution\modX $modx)`, раннер его
  *      вызывает: MODX уже поднят, второй бутстрап не нужен;
  *   2. `.php` старого образца, который сам делает `define('MODX_API_MODE'); require
  *      index.php` — запускается отдельным процессом, потому что повторный require
@@ -14,8 +15,9 @@
  * ни одна миграция — идемпотентность, которой раннер требует, в SQL почти невыразима.
  */
 
-namespace MxMigrations\Platform\Modx2;
+namespace MxMigrations\Platform\Modx3;
 
+use MODX\Revolution\modX;
 use MxMigrations\Core\ExecutorInterface;
 use MxMigrations\Core\MigrationFile;
 
@@ -24,10 +26,10 @@ use MxMigrations\Core\MigrationFile;
  */
 class ModxExecutor implements ExecutorInterface
 {
-    private \modX $modx;
+    private modX $modx;
     private string $phpBinary;
 
-    public function __construct(\modX $modx, string $phpBinary = PHP_BINARY)
+    public function __construct(modX $modx, string $phpBinary = PHP_BINARY)
     {
         $this->modx = $modx;
         $this->phpBinary = $phpBinary;
@@ -56,7 +58,8 @@ class ModxExecutor implements ExecutorInterface
 
         if (!is_callable($migration)) {
             throw new \RuntimeException(
-                'PHP-миграция должна возвращать callable вида `return function (\\modX $modx): void {...};`. '
+                'PHP-миграция должна возвращать callable вида '
+                . '`return function (\\MODX\\Revolution\\modX $modx): void {...};`. '
                 . 'Файл ничего не вернул — см. migrations/README.md.'
             );
         }

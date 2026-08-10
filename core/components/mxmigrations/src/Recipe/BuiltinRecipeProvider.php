@@ -16,7 +16,12 @@ final class BuiltinRecipeProvider implements MigrationRecipeProviderInterface
             'drop-column' => ['table' => 'таблица', 'column' => 'колонка'],
             'add-index' => ['table' => 'таблица', 'name' => 'имя индекса', 'columns' => 'колонки', 'unique' => 'уникальный'],
             'drop-index' => ['table' => 'таблица', 'name' => 'имя индекса'],
-            'create-tables' => ['package' => 'имя xPDO-пакета', 'model-path' => 'путь к модели', 'classes' => 'классы'],
+            'create-tables' => [
+                'package' => 'PSR-4 пакет модели',
+                'model-path' => 'путь к src модели',
+                'namespace-prefix' => 'корневой PSR-4 namespace',
+                'classes' => 'FQCN классов',
+            ],
         ];
         $recipes = [];
         foreach (BuiltinTemplates::RECIPES as $name => $description) {

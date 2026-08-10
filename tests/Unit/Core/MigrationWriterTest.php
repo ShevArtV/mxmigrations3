@@ -168,7 +168,7 @@ class MigrationWriterTest extends TestCase
 
 use Vendor\ProjectMigrationHelper;
 
-return function (modX $modx): void {
+return function (\MODX\Revolution\modX $modx): void {
     ProjectMigrationHelper::run($modx);
 };
 PHP;

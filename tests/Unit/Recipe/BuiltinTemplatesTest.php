@@ -47,9 +47,15 @@ class BuiltinTemplatesTest extends TestCase
         return [
             'empty' => ['empty', []],
             'drop-settings' => ['drop-settings', ['keys' => 'warehouse_handler,show_dap_warning']],
-            'drop-settings контекстные' => ['drop-settings', ['keys' => 'a', 'class' => 'modContextSetting']],
+            'drop-settings контекстные' => ['drop-settings', [
+                'keys' => 'a',
+                'class' => '\\MODX\\Revolution\\modContextSetting',
+            ]],
             'drop-tables' => ['drop-tables', ['tables' => 'sleepandglow_remains']],
-            'drop-elements' => ['drop-elements', ['names' => 'OldPlugin', 'class' => 'modPlugin']],
+            'drop-elements' => ['drop-elements', [
+                'names' => 'OldPlugin',
+                'class' => '\\MODX\\Revolution\\modPlugin',
+            ]],
             'add-column' => ['add-column', [
                 'table' => 'sleepandglow_reviews',
                 'column' => 'is_pinned',
@@ -74,9 +80,10 @@ class BuiltinTemplatesTest extends TestCase
             ]],
             'drop-index' => ['drop-index', ['table' => 'site_content', 'name' => 'idx_product_filter']],
             'create-tables' => ['create-tables', [
-                'package' => 'example',
-                'model-path' => '/var/www/core/components/example/model/',
-                'classes' => 'exampleReview,exampleWarehouse',
+                'package' => 'Example\\Model',
+                'model-path' => '/var/www/core/components/example/src/',
+                'namespace-prefix' => 'Example\\',
+                'classes' => 'Example\\Model\\Review,Example\\Model\\Warehouse',
             ]],
         ];
     }
@@ -117,6 +124,23 @@ class BuiltinTemplatesTest extends TestCase
         $this->assertStringNotContainsString('дубликат', $plain);
         $this->assertStringContainsString('ADD UNIQUE INDEX', $unique);
         $this->assertStringContainsString('HAVING COUNT(*) > 1', $unique);
+    }
+
+    public function testModx3RecipesUseNamespacedApi(): void
+    {
+        $templates = new BuiltinTemplates();
+        $settings = $templates->render('drop-settings', '20260807_1030__settings.php', ['keys' => 'old']);
+        $tables = $templates->render('create-tables', '20260807_1031__tables.php', [
+            'package' => 'Example\\Model',
+            'model-path' => '/var/www/core/components/example/src/',
+            'namespace-prefix' => 'Example\\',
+            'classes' => 'Example\\Model\\Review',
+        ]);
+
+        $this->assertStringContainsString('\\MODX\\Revolution\\modX $modx', $settings);
+        $this->assertStringContainsString(var_export('\\MODX\\Revolution\\modSystemSetting', true), $settings);
+        $this->assertStringContainsString('getCacheManager()->refresh()', $settings);
+        $this->assertStringContainsString('addPackage($package, $modelPath, null, $namespacePrefix)', $tables);
     }
 
     public function testUnknownRecipeIsRejected(): void

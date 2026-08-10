@@ -11,8 +11,9 @@
  * её сам при разрыве соединения — зависшего лока не остаётся.
  */
 
-namespace MxMigrations\Platform\Modx2;
+namespace MxMigrations\Platform\Modx3;
 
+use MODX\Revolution\modX;
 use MxMigrations\Core\LockInterface;
 
 /**
@@ -23,11 +24,11 @@ class MysqlLock implements LockInterface
     /** Имя лока в MySQL ограничено 64 символами. */
     private const MAX_NAME_LENGTH = 64;
 
-    private \modX $modx;
+    private modX $modx;
     private string $name;
     private bool $held = false;
 
-    public function __construct(\modX $modx, string $key)
+    public function __construct(modX $modx, string $key)
     {
         $this->modx = $modx;
         /* Лок в MySQL глобален для всего сервера, а не для базы: имя базы в ключе
