@@ -8,11 +8,12 @@
  * удаления пакетов брал голое `date('Ymd_Hi')` — то есть ровно то же самое, только
  * автоматически.
  *
- * Правило метки: `max(текущее время, последняя метка в каталоге + минута)`.
- * Взять просто текущее время нельзя — консольный PHP работает в UTC, а метки в
- * каталоге ставились по московскому времени, и новый файл встал бы в очередь ПЕРЕД
- * уже применёнными. Правило «не раньше последней» снимает разом и часовой пояс, и
- * два вызова в одну минуту, и сбитые часы машины.
+ * Правило метки: текущее время в часовом поясе проекта (`label_timezone`, по
+ * умолчанию `Europe/Moscow` — так ставились метки первых проектов). Консольный PHP
+ * обычно работает в UTC, поэтому пояс задаётся явно, а не берётся из `date()`.
+ * Сдвигать метку «за последней в каталоге» не нужно: порядок применения больше не
+ * ломается из-за метки раньше последней (см. `order` в конфиге проекта), а метка из
+ * будущего тянула бы за собой все следующие.
  *
  * Формат метки не менять на `YYYYMMDD_HHMMSS`: `_` в ASCII (95) больше цифры (48),
  * поэтому `20260806_215012__b.php` сортируется РАНЬШЕ `20260806_2150__a.php`, и
@@ -26,6 +27,9 @@ namespace MxMigrations\Core;
  */
 class MigrationWriter
 {
+    /** Часовой пояс меток по умолчанию: так ставились метки существующих проектов. */
+    public const DEFAULT_TIMEZONE = 'Europe/Moscow';
+
     /** Метка времени в имени файла: `YYYYMMDD_HHMM`. */
     public const LABEL_FORMAT = 'Ymd_Hi';
 
@@ -40,12 +44,20 @@ class MigrationWriter
     /** @var callable(): int Источник текущего времени — подменяется в тестах. */
     private $clock;
 
+    private \DateTimeZone $timezone;
+
     /**
      * @param string             $dir   каталог миграций
      * @param (callable(): int)|null $clock источник времени; по умолчанию `time()`
+     * @param string             $timezone часовой пояс меток (идентификатор IANA)
      */
-    public function __construct(string $dir, ?callable $clock = null)
+    public function __construct(string $dir, ?callable $clock = null, string $timezone = self::DEFAULT_TIMEZONE)
     {
+        try {
+            $this->timezone = new \DateTimeZone($timezone);
+        } catch (\Exception $e) {
+            throw new \InvalidArgumentException('Неизвестный часовой пояс меток: ' . $timezone);
+        }
         $this->dir = rtrim($dir, '/\\');
         $this->clock = $clock ?: static function (): int {
             return time();
@@ -82,39 +94,13 @@ class MigrationWriter
     }
 
     /**
-     * Последняя метка в каталоге или null, если файлов новой конвенции нет.
-     *
-     * Файлы, написанные до раннера (`add_*.sql`), под конвенцию не подходят и в
-     * расчёте не участвуют.
-     */
-    public function lastLabel(): ?string
-    {
-        $last = null;
-        foreach ((array)@scandir($this->dir) as $entry) {
-            if (!is_string($entry) || !preg_match(self::NAME_PATTERN, $entry, $match)) {
-                continue;
-            }
-            if ($last === null || strcmp($match[1], $last) > 0) {
-                $last = $match[1];
-            }
-        }
-
-        return $last;
-    }
-
-    /**
-     * Метка для новой миграции — гарантированно больше всех имеющихся.
+     * Метка для новой миграции — текущее время в часовом поясе проекта.
      */
     public function nextLabel(): string
     {
-        $now = date(self::LABEL_FORMAT, ($this->clock)());
-        $last = $this->lastLabel();
-
-        if ($last === null || strcmp($now, $last) > 0) {
-            return $now;
-        }
-
-        return $this->increment($last);
+        return (new \DateTimeImmutable('@' . ($this->clock)()))
+            ->setTimezone($this->timezone)
+            ->format(self::LABEL_FORMAT);
     }
 
     /**
@@ -151,7 +137,7 @@ class MigrationWriter
         /* Перезаписать существующий файл нельзя даже теоретически: он мог быть уже
            применён, и его содержимое зафиксировано checksum в журнале. */
         if (file_exists($path)) {
-            throw new \RuntimeException('Файл миграции уже существует: ' . $path);
+            throw new \RuntimeException('Файл миграции уже существует: ' . $path . '. Выберите другой слаг или повторите через минуту.');
         }
 
         if (@file_put_contents($path, $body) === false) {
@@ -241,23 +227,5 @@ class MigrationWriter
         }
 
         return substr($target, 0, $anchor) . implode("\n", $missing) . "\n\n" . substr($target, $anchor);
-    }
-
-    /**
-     * Следующая минута после метки.
-     *
-     * Считается через `mktime`, поэтому переполнение нормализуется само: у метки
-     * `20260806_2400` (а такая в каталоге есть — 24:00 не существует как время)
-     * следующей окажется `20260807_0001`.
-     */
-    private function increment(string $label): string
-    {
-        $year = (int)substr($label, 0, 4);
-        $month = (int)substr($label, 4, 2);
-        $day = (int)substr($label, 6, 2);
-        $hour = (int)substr($label, 9, 2);
-        $minute = (int)substr($label, 11, 2);
-
-        return date(self::LABEL_FORMAT, (int)mktime($hour, $minute + 1, 0, $month, $day, $year));
     }
 }

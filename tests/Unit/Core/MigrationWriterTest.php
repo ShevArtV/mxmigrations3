@@ -1,11 +1,10 @@
 <?php
 
 /**
- * Тесты выбора метки для новой миграции (#2608-40).
+ * Тесты выбора метки для новой миграции.
  *
- * Проверяется главное свойство: метка новой миграции больше всех имеющихся в
- * каталоге. Без него генератор сам создавал бы миграции «из прошлого» — часы
- * машины в UTC, а метки в каталоге по московскому времени.
+ * Метка — текущее время в часовом поясе проекта: без сдвига «за последней в каталоге»
+ * (одна метка из будущего тянула за собой все новые) и независимо от пояса процесса.
  */
 
 namespace MxMigrations\Tests\Unit\Core;
@@ -41,46 +40,35 @@ class MigrationWriterTest extends TestCase
         $this->assertSame('20260807_1030__do_something.php', $writer->nextName('do_something'));
     }
 
-    public function testStepsOverExistingLabelInTheSameMinute(): void
+    /** Метка — текущее время, даже если в каталоге есть метка «из будущего»: сдвига нет. */
+    public function testLabelIsCurrentTimeEvenWithFutureLabelInDirectory(): void
     {
-        $this->write('20260807_1030__first.php');
-        $writer = $this->writerAt('2026-08-07 10:30:00');
-
-        $this->assertSame('20260807_1031__second.php', $writer->nextName('second'));
-    }
-
-    /**
-     * Часы машины отстают от последней метки — берём не время, а метку.
-     *
-     * Ровно этот случай и есть на проекте: консольный PHP в UTC, а последние
-     * миграции помечены по московскому времени.
-     */
-    public function testNeverGoesBeforeTheLastLabel(): void
-    {
-        $this->write('20260806_2100__applied.php');
+        $this->write('20260901_1000__from_future.php');
         $writer = $this->writerAt('2026-08-06 19:08:00');
 
-        $this->assertSame('20260806_2101__next.php', $writer->nextName('next'));
+        $this->assertSame('20260806_1908__next.php', $writer->nextName('next'));
     }
 
-    /** В каталоге есть `20260806_2400` — 24:00 не существует, переполнение нормализуется. */
-    public function testHandlesLabelWithImpossibleTime(): void
+    /** Пояс меток берётся из настройки, а не из пояса процесса (в тесте процесс в UTC). */
+    public function testLabelUsesConfiguredTimezoneNotProcessOne(): void
     {
-        $this->write('20260806_2400__leftover.php');
-        $writer = $this->writerAt('2026-08-06 19:08:00');
+        $this->assertSame('UTC', date_default_timezone_get());
+        $moment = (int)strtotime('2026-08-06 19:08:00 UTC');
+        $clock = static function () use ($moment): int {
+            return $moment;
+        };
 
-        $this->assertSame('20260807_0001__next.php', $writer->nextName('next'));
+        $this->assertSame('20260806_2208__x.php', (new MigrationWriter($this->dir, $clock, 'Europe/Moscow'))->nextName('x'));
+        $this->assertSame('20260806_2208__x.php', (new MigrationWriter($this->dir, $clock))->nextName('x'), 'умолчание — Москва');
+        $this->assertSame('20260806_1908__x.php', (new MigrationWriter($this->dir, $clock, 'UTC'))->nextName('x'));
+        $this->assertSame('20260806_1508__x.php', (new MigrationWriter($this->dir, $clock, 'America/New_York'))->nextName('x'));
     }
 
-    /** Baseline-файлы без метки в расчёте не участвуют. */
-    public function testIgnoresFilesOutsideConvention(): void
+    public function testRejectsUnknownTimezone(): void
     {
-        $this->write('add_order_num_counter.sql');
-        $this->write('fix_header_menu_structure.php');
-        $writer = $this->writerAt('2026-08-07 10:30:00');
+        $this->expectException(\InvalidArgumentException::class);
 
-        $this->assertNull($writer->lastLabel());
-        $this->assertSame('20260807_1030__next.php', $writer->nextName('next'));
+        new MigrationWriter($this->dir, null, 'Mars/Olympus');
     }
 
     public function testWriteCreatesFileAndReturnsPath(): void
@@ -94,7 +82,8 @@ class MigrationWriterTest extends TestCase
         $this->assertSame('<?php // тело', file_get_contents($path));
     }
 
-    public function testTwoWritesInTheSameMinuteDoNotOverwriteEachOther(): void
+    /** Разные слаги в одну минуту не конфликтуют и метка не уезжает в будущее. */
+    public function testTwoWritesInTheSameMinuteKeepTheSameLabel(): void
     {
         $writer = $this->writerAt('2026-08-07 10:30:00');
 
@@ -102,7 +91,23 @@ class MigrationWriterTest extends TestCase
         $second = $writer->write('second', 'два');
 
         $this->assertSame('20260807_1030__first.php', basename($first));
-        $this->assertSame('20260807_1031__second.php', basename($second));
+        $this->assertSame('20260807_1030__second.php', basename($second));
+        $this->assertSame('один', file_get_contents($first));
+    }
+
+    /** Тот же слаг в ту же минуту — понятная ошибка без совета переименовывать, файл цел. */
+    public function testSameSlugInTheSameMinuteFailsWithoutOverwriting(): void
+    {
+        $writer = $this->writerAt('2026-08-07 10:30:00');
+        $first = $writer->write('same', 'один');
+
+        try {
+            $writer->write('same', 'два');
+            $this->fail('Ожидалась ошибка');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('уже существует', $e->getMessage());
+            $this->assertStringNotContainsString('Переименуйте', $e->getMessage());
+        }
         $this->assertSame('один', file_get_contents($first));
     }
 
@@ -200,7 +205,7 @@ PHP;
 
         return new MigrationWriter($this->dir, static function () use ($timestamp): int {
             return $timestamp;
-        });
+        }, 'UTC');
     }
 
     private function write(string $name): void

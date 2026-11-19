@@ -6,6 +6,10 @@ return [
     'id' => 'site',
     'modx_root' => $root,
     'migrations_path' => $root . '/core/migrations',
+    // Порядок: 'allow' (по умолчанию, с предупреждением) или 'strict' (блокировать).
+    'order' => 'allow',
+    // Часовой пояс меток новых миграций (по умолчанию Europe/Moscow).
+    'label_timezone' => 'Europe/Moscow',
     'models' => [
         'site' => [
             'schema_path' => $root . '/core/components/site/schema/site.mysql.schema.xml',

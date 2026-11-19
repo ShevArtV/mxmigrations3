@@ -29,14 +29,22 @@ class MigrationRunner
     private ExecutorInterface $executor;
     private LockInterface $lock;
     private MigrationScanner $scanner;
+    private bool $strictOrder;
 
+    /**
+     * @param bool $strictOrder `order = strict` из конфига проекта: миграция с меткой
+     *                          раньше применённых отказывает прогон. По умолчанию она
+     *                          применяется, а в вывод уходит предупреждение.
+     */
     public function __construct(
         string $dir,
         JournalInterface $journal,
         ExecutorInterface $executor,
         LockInterface $lock,
-        ?MigrationScanner $scanner = null
+        ?MigrationScanner $scanner = null,
+        bool $strictOrder = false
     ) {
+        $this->strictOrder = $strictOrder;
         $this->dir = $dir;
         $this->journal = $journal;
         $this->executor = $executor;
@@ -52,8 +60,14 @@ class MigrationRunner
      *     applied: array<int, array{file: MigrationFile, record: MigrationRecord}>,
      *     drifted: array<int, array{file: MigrationFile, record: MigrationRecord}>,
      *     missing: array<int, MigrationRecord>,
-     *     outOfOrder: array<int, MigrationFile>
+     *     outOfOrder: array<int, MigrationFile>,
+     *     renamed: array<int, array{file: MigrationFile, record: MigrationRecord, extra: bool}>,
+     *     errors: array<int, string>
      * }
+     *
+     * `pending` упорядочен по `@depends`, затем по имени. `renamed` — файлы, признанные
+     * переименованием применённой миграции: они не выполняются и в `pending` не входят.
+     * `errors` — то, из-за чего прогон невозможен: зависимость, цикл, дубликаты файлов.
      */
     public function plan(): array
     {
@@ -61,6 +75,24 @@ class MigrationRunner
 
         $records = $this->journal->all();
         $files = $this->scanner->scan($this->dir);
+
+        $detected = (new RenameDetector())->detect($files, $records);
+        $renamedNames = [];
+        foreach ($detected['renamed'] as $item) {
+            $renamedNames[$item['file']->getName()] = true;
+        }
+        $duplicateNames = [];
+        $errors = [];
+        foreach ($detected['duplicates'] as $group) {
+            $names = [];
+            foreach ($group as $file) {
+                $duplicateNames[$file->getName()] = true;
+                $names[] = $file->getName();
+            }
+            $errors[] = 'У неприменённых миграций одинаковое содержимое: ' . implode(', ', $names)
+                . '. Это дубликаты одной миграции (например, файл переименован, а на сервере остались оба имени) '
+                . 'либо разным миграциям нужно различие в содержимом; прогон отменён, пока остаётся один файл.';
+        }
 
         $pending = [];
         $applied = [];
@@ -76,6 +108,10 @@ class MigrationRunner
             $name = $file->getName();
             $seen[$name] = true;
             $record = $records[$name] ?? null;
+
+            if (!$record && (isset($renamedNames[$name]) || isset($duplicateNames[$name]))) {
+                continue;
+            }
 
             /* Упавшая миграция — не применённая: показываем её снова в pending,
                чтобы повторный `up` попробовал доиграть прогон с того же места. */
@@ -95,14 +131,30 @@ class MigrationRunner
             $applied[] = ['file' => $file, 'record' => $record];
         }
 
+        $claimed = [];
+        foreach ($detected['renamed'] as $item) {
+            $claimed[$item['record']->getName()] = true;
+        }
         $missing = [];
+        $satisfied = [];
         foreach ($records as $name => $record) {
-            if (!isset($seen[$name])) {
+            if (!isset($seen[$name]) && !isset($claimed[$name])) {
                 $missing[] = $record;
             }
+            if ($record->getStatus() !== self::STATUS_FAILED) {
+                $satisfied[$name] = true;
+            }
         }
+        $known = $seen + $renamedNames + $duplicateNames;
+        $resolved = (new DependencyResolver())->resolve($pending, $satisfied + $renamedNames, $known);
+        $pending = $resolved['ordered'];
+        $unknown = array_values(array_filter($unknown, static function (MigrationFile $file) use ($renamedNames, $duplicateNames): bool {
+            return !isset($renamedNames[$file->getName()]) && !isset($duplicateNames[$file->getName()]);
+        }));
 
         return [
+            'renamed' => $detected['renamed'],
+            'errors' => array_merge($errors, $resolved['errors']),
             'pending' => $pending,
             'applied' => $applied,
             'drifted' => $drifted,
@@ -120,9 +172,9 @@ class MigrationRunner
      * и идемпотентность от этого не спасает: «удалить колонку», проехавшая раньше
      * «добавить колонку», нигде не упадёт, а состояние баз разойдётся.
      *
-     * Момент выбран не случайно: файла ещё нет в журнале, поэтому переименовать его
-     * ничего не стоит. После применения имя становится ключом журнала, и цена правки
-     * вырастает до похода по всем серверам.
+     * Что с этим делать, решает `order` в конфиге проекта: по умолчанию миграция
+     * применяется, а раннер предупреждает; в строгом режиме прогон отказывает. Если
+     * порядок важен, зависимость задают явно — `@depends`.
      *
      * @param array<int, MigrationFile>                                     $unknown
      * @param array<int, array{file: MigrationFile, record: MigrationRecord}> $applied
@@ -166,14 +218,20 @@ class MigrationRunner
      *
      * @return array{
      *     dryRun: bool,
+     *     warnings: array<int, string>,
+     *     errors: array<int, string>,
+     *     renamed: array<int, string>,
      *     executed: array<int, array{name: string, duration: int, output: string}>,
      *     failed: array{name: string, error: string}|null,
      *     skipped: array<int, string>,
      *     accepted: array<int, string>
      * }
      *
-     * @throws \RuntimeException если прогон уже идёт, обнаружен дрейф checksum
-     *                           или новая миграция встаёт раньше применённых.
+     * @throws \RuntimeException если прогон уже идёт, обнаружен дрейф checksum, не
+     *                           сошлись зависимости или (при `order = strict`) новая
+     *                           миграция встаёт раньше применённых. В сухом прогоне
+     *                           те же причины не бросают исключение, а возвращаются в
+     *                           `errors` вместе со всем списком очереди.
      */
     public function up(
         bool $dryRun = false,
@@ -184,14 +242,18 @@ class MigrationRunner
         $plan = $this->plan();
         $this->assertNoDrift($plan['drifted'], $ignoreChecksum);
 
-        /* Сухой прогон не отказывает: он и нужен, чтобы посмотреть, что происходит.
-           Печатает предупреждение вызывающая сторона. */
-        if (!$dryRun) {
-            $this->assertInOrder($plan['outOfOrder'], $allowOutOfOrder);
+        /* Сухой прогон не бросает исключение, но возвращает те же ошибки, что вызвали бы
+           отказ настоящего: он служит предпроверкой до выкладки. */
+        $errors = $this->blockers($plan, $allowOutOfOrder);
+        if ($errors && !$dryRun) {
+            throw new \RuntimeException(implode(PHP_EOL, $errors));
         }
 
         $result = [
             'dryRun' => $dryRun,
+            'warnings' => $this->orderWarnings($plan, $allowOutOfOrder),
+            'errors' => $errors,
+            'renamed' => $this->renamedLines($plan['renamed']),
             'executed' => [],
             'failed' => null,
             'skipped' => [],
@@ -228,6 +290,12 @@ class MigrationRunner
                прогон мог часть миграций уже применить. */
             $plan = $this->plan();
             $this->assertNoDrift($plan['drifted'], $ignoreChecksum);
+            $errors = $this->blockers($plan, $allowOutOfOrder);
+            if ($errors) {
+                throw new \RuntimeException(implode(PHP_EOL, $errors));
+            }
+            $result['warnings'] = $this->orderWarnings($plan, $allowOutOfOrder);
+            $result['renamed'] = $this->renamedLines($plan['renamed']);
             $result['accepted'] = $this->acceptDrift($plan['drifted'], $ignoreChecksum, $appliedBy);
             $queue = $plan['pending'];
 
@@ -378,32 +446,37 @@ class MigrationRunner
     }
 
     /**
-     * Отказать в прогоне, если новая миграция встаёт раньше уже применённых.
+     * Чистка журнала от призраков переименований (`journal:clean`); см. `GhostCleaner`.
      *
-     * Отказ, а не предупреждение: пропущенное предупреждение всплывёт через месяц на
-     * сервере, поднятом с нуля, где порядок окажется другим. Пока файл не применён,
-     * лечится переименованием за секунду.
-     *
-     * @param array<int, MigrationFile> $outOfOrder
+     * @return array{
+     *     apply: bool,
+     *     renamed: array<int, array{from: string, to: string, fileRemains: bool}>,
+     *     extra: array<int, string>,
+     *     unmatched: array<int, string>
+     * }
      */
-    private function assertInOrder(array $outOfOrder, bool $allowOutOfOrder): void
+    public function cleanGhosts(bool $apply = false, string $appliedBy = ''): array
     {
-        if (!$outOfOrder || $allowOutOfOrder) {
-            return;
-        }
+        return (new GhostCleaner($this->dir, $this->journal, $this->lock, function (): array {
+            return $this->plan();
+        }))->clean($apply, $appliedBy);
+    }
 
-        $names = array_map(
-            static function (MigrationFile $file): string {
-                return $file->getName();
-            },
-            $outOfOrder
-        );
+    /** @param array<string, mixed> $plan @return array<int, string> */
+    private function blockers(array $plan, bool $allowOutOfOrder): array
+    {
+        return PlanReport::blockers($plan, $this->strictOrder, $allowOutOfOrder);
+    }
 
-        throw new \RuntimeException(
-            'Эти миграции встают в очередь раньше уже применённых: ' . implode(', ', $names) . '. '
-            . 'На сервере, поднятом с нуля, они выполнятся в другом порядке. '
-            . 'Переименуйте файл на метку в конце очереди (он ещё не в журнале, это бесплатно) '
-            . 'или запустите с --allow-out-of-order, если зависимости от соседних миграций нет.'
-        );
+    /** @param array<string, mixed> $plan @return array<int, string> */
+    private function orderWarnings(array $plan, bool $allowOutOfOrder): array
+    {
+        return PlanReport::orderWarnings($plan, $this->strictOrder, $allowOutOfOrder);
+    }
+
+    /** @param array<int, array{file: MigrationFile, record: MigrationRecord, extra: bool}> $renamed @return array<int, string> */
+    private function renamedLines(array $renamed): array
+    {
+        return PlanReport::renamedLines($renamed);
     }
 }
