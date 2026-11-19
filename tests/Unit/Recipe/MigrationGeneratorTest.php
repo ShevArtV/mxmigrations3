@@ -17,7 +17,7 @@ final class MigrationGeneratorTest extends TestCase
         $registry->addProvider(new ProjectRecipeProvider());
         $writer = new MigrationWriter($dir, static function (): int {
             return strtotime('2026-08-10 17:00:00');
-        });
+        }, 'UTC');
 
         $result = (new MigrationGenerator($writer, $registry))->generate(
             'seed_widget',

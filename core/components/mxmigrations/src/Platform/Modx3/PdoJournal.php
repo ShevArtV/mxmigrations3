@@ -74,6 +74,18 @@ final class PdoJournal implements JournalInterface
         }
     }
 
+    public function rename(string $from, string $to, string $note = ''): void
+    {
+        $statement = $this->modx->prepare(
+            'UPDATE ' . $this->quotedTable() . ' SET `name`=:to,'
+            . ' `output`=TRIM(CONCAT(IFNULL(`output`, \'\'), CHAR(10), :note))'
+            . ' WHERE `name`=:from'
+        );
+        if (!$statement || !$statement->execute(['to' => $to, 'from' => $from, 'note' => $note]) || $statement->rowCount() !== 1) {
+            throw new \RuntimeException('Не удалось переименовать запись журнала ' . $from . ' в ' . $to . '.');
+        }
+    }
+
     private function quotedTable(): string
     {
         return '`' . $this->table . '`';

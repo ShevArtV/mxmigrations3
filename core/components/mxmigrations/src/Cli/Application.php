@@ -54,6 +54,8 @@ final class Application
                 return $this->status($this->runner(), isset($options['strict']));
             case 'up':
                 return $this->up($this->runner(), $options);
+            case 'journal:clean':
+                return $this->journalClean($this->runner(), $options);
             case 'baseline':
                 $marked = $this->runner()->baseline((string)($options['by'] ?? $this->whoami()));
                 echo $marked ? 'Baseline: ' . implode(', ', $marked) . PHP_EOL : 'Нечего помечать.' . PHP_EOL;
@@ -77,7 +79,7 @@ final class Application
         $write = isset($options['apply']);
         $model = isset($options['model']) ? (string)$options['model'] : null;
         unset($options['recipe'], $options['apply'], $options['config'], $options['model']);
-        $writer = new MigrationWriter($this->config->getMigrationsPath());
+        $writer = new MigrationWriter($this->config->getMigrationsPath(), null, $this->config->getLabelTimezone());
         $result = (new MigrationGenerator(
             $writer,
             $this->recipes
@@ -174,18 +176,26 @@ final class Application
             $this->config->getMigrationsPath(),
             new PdoJournal($modx, $this->config->getJournalTable()),
             new ModxExecutor($modx),
-            new MysqlLock($modx, $this->config->getLockName())
+            new MysqlLock($modx, $this->config->getLockName()),
+            null,
+            $this->config->isStrictOrder()
         );
     }
 
     private function status(MigrationRunner $runner, bool $strict): int
     {
         $plan = $runner->plan();
-        foreach (['pending', 'drifted', 'missing', 'outOfOrder'] as $group) {
+        foreach (['pending', 'drifted', 'missing', 'outOfOrder', 'renamed'] as $group) {
             echo $group . ': ' . count($plan[$group]) . PHP_EOL;
         }
         echo 'applied: ' . count($plan['applied']) . PHP_EOL;
-        $problems = $plan['pending'] || $plan['drifted'] || $plan['missing'] || $plan['outOfOrder'];
+        foreach ($plan['errors'] as $error) {
+            echo '[ERR] ' . $error . PHP_EOL;
+        }
+        /* Порядок — проблема только в строгом режиме; ошибки зависимостей и дубликаты
+           файлов — в любом: их up всё равно не пропустит. */
+        $problems = $plan['pending'] || $plan['drifted'] || $plan['missing'] || $plan['errors']
+            || ($plan['outOfOrder'] && $this->config->isStrictOrder());
         return $strict && $problems ? 2 : 0;
     }
 
@@ -198,11 +208,24 @@ final class Application
             (string)($options['by'] ?? $this->whoami()),
             isset($options['allow-out-of-order'])
         );
+        foreach ($result['warnings'] as $warning) {
+            echo '[WARN] ' . $warning . PHP_EOL;
+        }
+        foreach ($result['renamed'] as $line) {
+            echo '[RENAMED] ' . $line . PHP_EOL;
+        }
         foreach ($result['executed'] as $migration) {
             echo ($result['dryRun'] ? '[DRY] ' : '[OK] ') . $migration['name'] . PHP_EOL;
         }
         foreach ($result['accepted'] as $name) {
             echo '[ACCEPTED] ' . $name . PHP_EOL;
+        }
+        /* Ошибки сухого прогона идут в stdout: deploy-скрипты читают его и глушат stderr. */
+        foreach ($result['errors'] as $error) {
+            echo '[ERR] ' . $error . PHP_EOL;
+        }
+        if ($result['errors']) {
+            return 2;
         }
         if ($result['failed'] !== null) {
             fwrite(STDERR, '[FAILED] ' . $result['failed']['name'] . ': ' . $result['failed']['error'] . PHP_EOL);
@@ -210,6 +233,29 @@ final class Application
         }
         if (!$result['executed'] && !$result['accepted']) {
             echo 'Нечего применять.' . PHP_EOL;
+        }
+        return 0;
+    }
+
+    /** @param array<string, mixed> $options */
+    private function journalClean(MigrationRunner $runner, array $options): int
+    {
+        $apply = isset($options['apply']);
+        $result = $runner->cleanGhosts($apply, (string)($options['by'] ?? $this->whoami()));
+        foreach ($result['renamed'] as $pair) {
+            echo ($apply ? '[RENAMED] ' : '[GHOST] ') . $pair['from'] . ' -> ' . $pair['to']
+                . ($pair['fileRemains'] ? ' (старый файл ещё в каталоге)' : '') . PHP_EOL;
+        }
+        foreach ($result['extra'] as $name) {
+            echo '[EXTRA] ' . $name . ' — лишний файл, удалите его из каталога миграций' . PHP_EOL;
+        }
+        foreach ($result['unmatched'] as $name) {
+            echo '[MISSING] ' . $name . ' — файла нет, переименование не распознано (нужен @renamed-from)' . PHP_EOL;
+        }
+        if (!$result['renamed'] && !$result['extra'] && !$result['unmatched']) {
+            echo 'Призраков нет.' . PHP_EOL;
+        } elseif (!$apply && $result['renamed']) {
+            echo 'Сухой прогон: журнал не изменён. Для записи добавьте --apply.' . PHP_EOL;
         }
         return 0;
     }
@@ -275,6 +321,7 @@ final class Application
     {
         return "mxMigrations\n"
             . "  status [--strict]\n  up [--dry-run] [--ignore-checksum] [--allow-out-of-order]\n"
+            . "  journal:clean [--apply]\n"
             . "  baseline [--by=name]\n  new <slug> [--recipe=name] [recipe options] [--apply]\n"
             . "  model:build [--model=name] [--apply]\n"
             . "  recipe:list\n  recipe:help <name>\n";

@@ -29,5 +29,35 @@ final class ProjectConfigTest extends TestCase
         self::assertTrue($config->getModel('minishop2')->usesOverlay());
         self::assertFalse($config->getModel('site')->usesOverlay());
     }
+
+    /** @return array<string, mixed> */
+    private function base(array $extra = []): array
+    {
+        return array_merge(['id' => 'site', 'migrations_path' => '/tmp/m'], $extra);
+    }
+
+    public function testDefaultsAreAllowOrderAndMoscow(): void
+    {
+        $config = new ProjectConfig($this->base(), '/tmp');
+
+        self::assertSame('allow', $config->getOrder());
+        self::assertFalse($config->isStrictOrder());
+        self::assertSame('Europe/Moscow', $config->getLabelTimezone());
+    }
+
+    public function testStrictOrderAndTimezoneFromConfig(): void
+    {
+        $config = new ProjectConfig($this->base(['order' => 'strict', 'label_timezone' => 'UTC']), '/tmp');
+
+        self::assertTrue($config->isStrictOrder());
+        self::assertSame('UTC', $config->getLabelTimezone());
+    }
+
+    public function testUnknownOrderIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new ProjectConfig($this->base(['order' => 'whatever']), '/tmp');
+    }
 }
 

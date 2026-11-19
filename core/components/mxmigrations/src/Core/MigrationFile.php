@@ -4,8 +4,13 @@
  * Файл миграции: имя, тип и контрольная сумма.
  *
  * Ключ идемпотентности — имя файла, оно же попадает в журнал. Порядок применения
- * задаётся именем (конвенция `YYYYMMDD_HHMM__slug.php`), поэтому переименование
- * применённой миграции для раннера равносильно появлению новой.
+ * задаётся именем (конвенция `YYYYMMDD_HHMM__slug.php`). Переименованную применённую
+ * миграцию раннер узнаёт по checksum содержимого или по метке `@renamed-from` в файле
+ * (см. `RenameDetector`) и повторно не выполняет.
+ *
+ * Метки в комментариях файла: `@depends <имя миграции>` — миграция выполнится только
+ * после указанной; `@renamed-from <старое имя>` — файл есть та же миграция под новым
+ * именем (нужна, если при переименовании менялось и содержимое).
  */
 
 namespace MxMigrations\Core;
@@ -84,6 +89,38 @@ class MigrationFile
     public function getLabel(): ?string
     {
         return preg_match('~^(\d{8}_\d{4})__~', $this->name, $match) ? $match[1] : null;
+    }
+
+    /**
+     * Имена миграций из `@depends` (с расширением `.php`, без повторов).
+     *
+     * @return array<int, string>
+     */
+    public function getDepends(): array
+    {
+        return $this->annotation('depends');
+    }
+
+    /** Старое имя из `@renamed-from` или null. */
+    public function getRenamedFrom(): ?string
+    {
+        return $this->annotation('renamed-from')[0] ?? null;
+    }
+
+    /** @return array<int, string> */
+    private function annotation(string $tag): array
+    {
+        $found = [];
+        if (preg_match_all('~^[ \t]*(?://|\#|/\*+|\*)[ \t]*@' . $tag . '[ \t]+([A-Za-z0-9_.\-]+)~m', $this->getContents(), $m)) {
+            foreach ($m[1] as $name) {
+                if (substr($name, -4) !== '.php') {
+                    $name .= '.php';
+                }
+                $found[$name] = $name;
+            }
+        }
+
+        return array_values($found);
     }
 
     /**

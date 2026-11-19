@@ -11,12 +11,12 @@
 namespace MxMigrations\Tests\Unit\Core;
 
 use PHPUnit\Framework\TestCase;
-use MxMigrations\Core\ExecutorInterface;
-use MxMigrations\Core\JournalInterface;
-use MxMigrations\Core\LockInterface;
 use MxMigrations\Core\MigrationFile;
 use MxMigrations\Core\MigrationRecord;
 use MxMigrations\Core\MigrationRunner;
+use MxMigrations\Tests\Fixtures\FakeExecutor;
+use MxMigrations\Tests\Fixtures\FakeJournal;
+use MxMigrations\Tests\Fixtures\FakeLock;
 
 class MigrationRunnerTest extends TestCase
 {
@@ -198,13 +198,8 @@ class MigrationRunnerTest extends TestCase
         self::assertSame('ушедший.php', $plan['missing'][0]->getName());
     }
 
-    /**
-     * Миграция, влитая с меткой раньше уже применённой, — прогон останавливается.
-     *
-     * Это единственный случай, когда один набор файлов даёт разный порядок на разных
-     * серверах: здесь новая применится последней, на сервере с нуля — в середине.
-     */
-    public function testUpRefusesMigrationThatJumpsBeforeAppliedOnes(): void
+    /** По умолчанию метка раньше применённых не мешает: миграция применяется, в результате — предупреждение. */
+    public function testOutOfOrderIsAllowedByDefaultWithWarning(): void
     {
         $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
         $runner = $this->runner();
@@ -217,27 +212,78 @@ class MigrationRunnerTest extends TestCase
         self::assertCount(1, $plan['outOfOrder']);
         self::assertSame('20260101_1000__latecomer.php', $plan['outOfOrder'][0]->getName());
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessageMatches('~20260101_1000__latecomer\.php~');
-        $runner->up();
-    }
-
-    public function testAllowOutOfOrderLetsTheRunGoThrough(): void
-    {
-        $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
-        $runner = $this->runner();
-        $runner->up();
-        $this->write('20260101_1000__latecomer.php', '<?php return function ($modx) {};');
-        $this->executor->executed = [];
-
-        $result = $runner->up(false, false, '', true);
+        $result = $runner->up();
 
         self::assertSame(['20260101_1000__latecomer.php'], $this->executor->executed);
         self::assertNull($result['failed']);
+        self::assertCount(1, $result['warnings']);
+        self::assertStringContainsString('20260101_1000__latecomer.php', $result['warnings'][0]);
+        self::assertSame([], $result['errors']);
     }
 
-    /** Сухой прогон диагностический: он показывает картину, а не запрещает её. */
-    public function testDryRunDoesNotRefuseOutOfOrder(): void
+    /** Две параллельные ветки с метками вразнобой применяются без отказа. */
+    public function testParallelBranchesWithShuffledLabelsApplyWithoutRefusal(): void
+    {
+        $this->write('20260105_1000__base.php', '<?php return function ($modx) {};');
+        $runner = $this->runner();
+        $runner->up();
+        $this->write('20260103_0900__branch_a.php', '<?php return function ($modx) {};');
+        $this->write('20260102_1500__branch_b.php', '<?php return function ($modx) {};');
+        $this->executor->executed = [];
+
+        $result = $runner->up();
+
+        self::assertSame(['20260102_1500__branch_b.php', '20260103_0900__branch_a.php'], $this->executor->executed);
+        self::assertNull($result['failed']);
+    }
+
+    /** Строгий режим из конфига возвращает отказ; в тексте нет совета переименовывать. */
+    public function testStrictOrderRefusesMigrationThatJumpsBeforeAppliedOnes(): void
+    {
+        $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
+        $this->runner()->up();
+        $this->write('20260101_1000__latecomer.php', '<?php return function ($modx) {};');
+        $this->executor->executed = [];
+
+        try {
+            $this->runner(true)->up();
+            self::fail('Ожидался отказ');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('20260101_1000__latecomer.php', $e->getMessage());
+            self::assertStringContainsString('--allow-out-of-order', $e->getMessage());
+            self::assertStringNotContainsString('ереименуйте', $e->getMessage());
+        }
+        self::assertSame([], $this->executor->executed);
+    }
+
+    public function testAllowOutOfOrderFlagOverridesStrictOrder(): void
+    {
+        $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
+        $this->runner()->up();
+        $this->write('20260101_1000__latecomer.php', '<?php return function ($modx) {};');
+        $this->executor->executed = [];
+
+        $result = $this->runner(true)->up(false, false, '', true);
+
+        self::assertSame(['20260101_1000__latecomer.php'], $this->executor->executed);
+        self::assertCount(1, $result['warnings']);
+    }
+
+    /** Сухой прогон в строгом режиме показывает весь список и возвращает ту же ошибку, что и настоящий. */
+    public function testDryRunInStrictOrderReportsErrorWithFullList(): void
+    {
+        $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
+        $this->runner()->up();
+        $this->write('20260101_1000__latecomer.php', '<?php return function ($modx) {};');
+
+        $result = $this->runner(true)->up(true);
+
+        self::assertCount(1, $result['executed']);
+        self::assertCount(1, $result['errors']);
+        self::assertSame([], $result['warnings']);
+    }
+
+    public function testDryRunInAllowOrderOnlyWarns(): void
     {
         $this->write('20260102_1000__applied.php', '<?php return function ($modx) {};');
         $runner = $this->runner();
@@ -247,6 +293,8 @@ class MigrationRunnerTest extends TestCase
         $result = $runner->up(true);
 
         self::assertCount(1, $result['executed']);
+        self::assertSame([], $result['errors']);
+        self::assertCount(1, $result['warnings']);
     }
 
     /**
@@ -287,77 +335,14 @@ class MigrationRunnerTest extends TestCase
         self::assertSame([], $plan['outOfOrder']);
     }
 
-    private function runner(): MigrationRunner
+    private function runner(bool $strictOrder = false): MigrationRunner
     {
-        return new MigrationRunner($this->dir, $this->journal, $this->executor, $this->lock);
+        return new MigrationRunner($this->dir, $this->journal, $this->executor, $this->lock, null, $strictOrder);
     }
 
+    /** К содержимому добавляется имя файла: одинаковые заглушки раннер принял бы за переименование. */
     private function write(string $name, string $contents): void
     {
-        file_put_contents($this->dir . '/' . $name, $contents);
-    }
-}
-
-class FakeJournal implements JournalInterface
-{
-    public bool $tableEnsured = false;
-
-    /** @var array<string, MigrationRecord> */
-    public array $records = [];
-
-    public function ensureTable(): void
-    {
-        $this->tableEnsured = true;
-    }
-
-    public function all(): array
-    {
-        return $this->records;
-    }
-
-    public function record(MigrationRecord $record): void
-    {
-        $this->records[$record->getName()] = $record;
-    }
-}
-
-class FakeExecutor implements ExecutorInterface
-{
-    /** @var array<int, string> */
-    public array $executed = [];
-
-    public ?string $failOn = null;
-
-    public function execute(MigrationFile $file): string
-    {
-        if ($this->failOn === $file->getName()) {
-            throw new \RuntimeException('синтетический сбой');
-        }
-
-        $this->executed[] = $file->getName();
-
-        return 'ок';
-    }
-}
-
-class FakeLock implements LockInterface
-{
-    public bool $free = true;
-    public int $acquired = 0;
-    public int $released = 0;
-
-    public function acquire(): bool
-    {
-        if (!$this->free) {
-            return false;
-        }
-        $this->acquired++;
-
-        return true;
-    }
-
-    public function release(): void
-    {
-        $this->released++;
+        file_put_contents($this->dir . '/' . $name, $contents . "\n// " . $name . "\n");
     }
 }

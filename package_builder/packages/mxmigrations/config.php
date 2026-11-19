@@ -11,7 +11,7 @@ return [
     'name' => 'mxMigrations',
     'name_lower' => 'mxmigrations',
     'name_short' => 'mxmigrations',
-    'version' => '2.1.0',
+    'version' => '2.2.0',
     'release' => 'beta',
     'php_version' => '8.1',
 

@@ -4,11 +4,19 @@ namespace MxMigrations\Config;
 
 final class ProjectConfig
 {
+    /** Новая миграция с меткой раньше применённых допустима: в лог уходит предупреждение. */
+    public const ORDER_ALLOW = 'allow';
+
+    /** Новая миграция с меткой раньше применённых — отказ всего прогона. */
+    public const ORDER_STRICT = 'strict';
+
     private string $id;
     private string $migrationsPath;
     private string $modxRoot;
     /** @var array<string, ModelConfig> */
     private array $models;
+    private string $order;
+    private string $labelTimezone;
     /** @var array<int, string> */
     private array $recipeProviders;
     /** @var array<int, string> */
@@ -33,6 +41,11 @@ final class ProjectConfig
                 !empty($model['overlay'])
             );
         }
+        $this->order = (string)($data['order'] ?? self::ORDER_ALLOW);
+        if (!in_array($this->order, [self::ORDER_ALLOW, self::ORDER_STRICT], true)) {
+            throw new \InvalidArgumentException("order должен быть 'allow' или 'strict'.");
+        }
+        $this->labelTimezone = (string)($data['label_timezone'] ?? \MxMigrations\Core\MigrationWriter::DEFAULT_TIMEZONE);
         $this->recipeProviders = array_values(array_map('strval', (array)($data['recipe_providers'] ?? [])));
         $this->autoload = [];
         foreach ((array)($data['autoload'] ?? []) as $path) {
@@ -73,6 +86,11 @@ final class ProjectConfig
     {
         return $this->migrationsPath . '/.mxmigrations/model-changes.php';
     }
+    /** `allow` (по умолчанию) или `strict`: отказ прогона при метке раньше применённых. */
+    public function getOrder(): string { return $this->order; }
+    public function isStrictOrder(): bool { return $this->order === self::ORDER_STRICT; }
+    /** Часовой пояс меток новых миграций; по умолчанию `Europe/Moscow`. */
+    public function getLabelTimezone(): string { return $this->labelTimezone; }
     /** @return array<int, string> */
     public function getRecipeProviders(): array { return $this->recipeProviders; }
     /** @return array<int, string> */

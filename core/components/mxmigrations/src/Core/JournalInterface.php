@@ -28,4 +28,11 @@ interface JournalInterface
     public function all(): array;
 
     public function record(MigrationRecord $record): void;
+
+    /**
+     * Переименовать запись (призрак переименования), сохранив статус и время применения.
+     *
+     * @throws \RuntimeException если записи нет или новое имя уже занято
+     */
+    public function rename(string $from, string $to, string $note = ''): void;
 }
